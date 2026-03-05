@@ -4,14 +4,15 @@ import streamlit as st
 def get_range_for_difficulty(difficulty: str):
     if difficulty == "Easy":
         return 1, 20
+    # Fixed: swapped ranges so Hard (1-100) is wider than Normal (1-50)
     if difficulty == "Normal":
-        return 1, 100
-    if difficulty == "Hard":
         return 1, 50
+    if difficulty == "Hard":
+        return 1, 100
     return 1, 100
 
 
-def parse_guess(raw: str):
+def parse_guess(raw: str, low: int, high: int):
     if raw is None:
         return False, None, "Enter a guess."
 
@@ -26,6 +27,10 @@ def parse_guess(raw: str):
     except Exception:
         return False, None, "That is not a number."
 
+    # Fixed: validate that the guess falls within the allowed range
+    if value < low or value > high:
+        return False, None, f"Please enter a number between {low} and {high}."
+
     return True, value, None
 
 
@@ -34,29 +39,34 @@ def check_guess(guess, secret):
         return "Win", "🎉 Correct!"
 
     try:
+        # Fixed: flipped hints — too high means go lower, too low means go higher
         if guess > secret:
-            return "Too High", "📈 Go HIGHER!"
+            return "Too High", "📉 Go LOWER!"
         else:
-            return "Too Low", "📉 Go LOWER!"
+            return "Too Low", "📈 Go HIGHER!"
     except TypeError:
-        g = str(guess)
-        if g == secret:
-            return "Win", "🎉 Correct!"
-        if g > secret:
-            return "Too High", "📈 Go HIGHER!"
-        return "Too Low", "📉 Go LOWER!"
+        # Fixed: cast secret to int for proper numeric comparison instead of casting guess to str
+        try:
+            s = int(secret)
+            if guess == s:
+                return "Win", "🎉 Correct!"
+            if guess > s:
+                return "Too High", "📉 Go LOWER!"
+            return "Too Low", "📈 Go HIGHER!"
+        except (ValueError, TypeError):
+            return "Too Low", "📈 Go HIGHER!"
 
 
 def update_score(current_score: int, outcome: str, attempt_number: int):
+
     if outcome == "Win":
         points = 100 - 10 * (attempt_number + 1)
         if points < 10:
             points = 10
         return current_score + points
 
+    # Fixed: Too High now consistently deducts 5 points like Too Low
     if outcome == "Too High":
-        if attempt_number % 2 == 0:
-            return current_score + 5
         return current_score - 5
 
     if outcome == "Too Low":
@@ -93,7 +103,7 @@ if "secret" not in st.session_state:
     st.session_state.secret = random.randint(low, high)
 
 if "attempts" not in st.session_state:
-    st.session_state.attempts = 1
+    st.session_state.attempts = 0  # Fixed: initialize to 0 instead of 1
 
 if "score" not in st.session_state:
     st.session_state.score = 0
@@ -105,18 +115,6 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 st.subheader("Make a guess")
-
-st.info(
-    f"Guess a number between 1 and 100. "
-    f"Attempts left: {attempt_limit - st.session_state.attempts}"
-)
-
-with st.expander("Developer Debug Info"):
-    st.write("Secret:", st.session_state.secret)
-    st.write("Attempts:", st.session_state.attempts)
-    st.write("Score:", st.session_state.score)
-    st.write("Difficulty:", difficulty)
-    st.write("History:", st.session_state.history)
 
 raw_guess = st.text_input(
     "Enter your guess:",
@@ -131,9 +129,28 @@ with col2:
 with col3:
     show_hint = st.checkbox("Show hint", value=True)
 
+# Fixed: buttons are defined before the info banner so submit is available.
+# Subtracting 1 when submit is pressed accounts for the attempt not yet being
+# incremented (that happens below after validation).
+st.info(
+    f"Guess a number between {low} and {high}. "  # Fixed: use low/high from difficulty
+    f"Attempts left: {attempt_limit - st.session_state.attempts - (1 if submit else 0)}"
+)
+
+with st.expander("Developer Debug Info"):
+    st.write("Secret:", st.session_state.secret)
+    st.write("Attempts:", st.session_state.attempts)
+    st.write("Score:", st.session_state.score)
+    st.write("Difficulty:", difficulty)
+    st.write("History:", st.session_state.history)
+
 if new_game:
+    # Fixed: reset all state so the game is fully playable after clicking New Game
     st.session_state.attempts = 0
-    st.session_state.secret = random.randint(1, 100)
+    st.session_state.secret = random.randint(low, high)  # Fixed: use difficulty range
+    st.session_state.status = "playing"
+    st.session_state.history = []
+    st.session_state.score = 0
     st.success("New game started.")
     st.rerun()
 
@@ -145,22 +162,16 @@ if st.session_state.status != "playing":
     st.stop()
 
 if submit:
-    st.session_state.attempts += 1
-
-    ok, guess_int, err = parse_guess(raw_guess)
+    # Fixed: validate first, only increment and record history on a valid guess
+    ok, guess_int, err = parse_guess(raw_guess, low, high)
 
     if not ok:
-        st.session_state.history.append(raw_guess)
         st.error(err)
     else:
+        st.session_state.attempts += 1
         st.session_state.history.append(guess_int)
 
-        if st.session_state.attempts % 2 == 0:
-            secret = str(st.session_state.secret)
-        else:
-            secret = st.session_state.secret
-
-        outcome, message = check_guess(guess_int, secret)
+        outcome, message = check_guess(guess_int, st.session_state.secret)
 
         if show_hint:
             st.warning(message)
